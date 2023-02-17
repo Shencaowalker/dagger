@@ -1,0 +1,21 @@
+*.log
+*.log.*
+dagger
+*.db
+
+# editor
+.vscode/
+.idea/
+static/export
+static/snapshot
+static/rules
+.DS_Store
+
+backend/static
+
+ui/node_modules
+
+.git/*
+ui/dist
+charts
+tips.md
