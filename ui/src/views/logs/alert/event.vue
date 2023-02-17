@@ -113,23 +113,18 @@
 }
 .v-list-item-warn {
   border-left: 3px solid #fb8c00 !important;
-  white-space: pre-wrap !important;
 }
 .v-list-item-info {
   border-left: 3px solid #4caf50 !important;
-  white-space: pre-wrap !important;
 }
 .v-list-item-debug {
   border-left: 3px solid #5cbbf6 !important;
-  white-space: pre-wrap !important;
 }
 .v-list-item-error {
   border-left: 3px solid #ff5252 !important;
-  white-space: pre-wrap !important;
 }
 .v-list-item-unknown {
   border-left: 3px solid #607d8b !important;
-  white-space: pre-wrap !important;
 }
 .message {
   margin-right: 10px;

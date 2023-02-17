@@ -16,6 +16,7 @@
                 ref="lokiFilter"
                 @updateLogQL="handlerUpdateLogQL"
                 :pod.sync="pod"
+		            :dateRangeTimestamp="dateRangeTimestamp"
               ></loki-filter>
               <loki-filter-advance
                 v-else

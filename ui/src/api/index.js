@@ -3,7 +3,7 @@ import router from '@/router'
 import store from '@/store'
 
 axios.defaults.baseURL = `${window.location.origin}/api/v1`
-axios.defaults.timeout = 1000 * 60
+axios.defaults.timeout = 1000 * 1000
 
 axios.interceptors.request.use(function(config) {
   if (store.state.csrftoken) {

@@ -3,21 +3,21 @@ module.exports = {
     devServer: {
       proxy: {
         '/api/v1/loki': {
-          target: 'http://127.0.0.1:8088',
+          target: 'http://172.16.0.85:8000',
           changeOrigin: true,
           pathRewrite: {
             '^/api/v1/loki': '/api/v1/loki',
           },
         },
         '/ws/loki': {
-          target: 'http://127.0.0.1:8088',
+          target: 'http://172.16.0.85:8000',
           changeOrigin: true,
           pathRewrite: {
             '^/ws/loki': '/ws',
           },
         },
         '/swagger/': {
-          target: 'http://127.0.0.1:8088',
+          target: 'http://172.16.0.85:8000',
           changeOrigin: true,
           pathRewrite: {
             '^/swagger/': '/swagger/',

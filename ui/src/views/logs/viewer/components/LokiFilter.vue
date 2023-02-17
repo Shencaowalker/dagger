@@ -139,9 +139,7 @@ export default {
           this.filterDict.label.value = 'label'
           this.filterDict.label.text = `标签(${data.label})`
           const items = []
-
-          
-          if(!res||!res.data){
+if(!res||!res.data){
           this.filterDict.label.items =[]
           }else{
             res.data.forEach((item) => {
@@ -149,7 +147,6 @@ export default {
             })
             this.filterDict.label.items = items
           }
-         
         }
       } catch (err) {
         if (
@@ -357,12 +354,20 @@ export default {
 
             this.handlerSearch()
           } else {
-            console.warn(this.model, this.lastModel,this)
+            let res = '';
+            this.model.map(item => {
+              if (item.text) {
+                res = res + item.value + ':' + item.text.split(':')[1] + ','
+              } else {
+                res = res + item.value
+              }
+            })
+            console.warn(res, this.model);
             await this.listLabelValues({
-              label: this.model.map(item => item.value),
+              label: res,
               start: this.dateRangeTimestamp[0],
               end: this.dateRangeTimestamp[1],
-            })
+            }) 
             this.filterItems = []
             this.filterDict.label.items.forEach((i) => {
               this.filterItems.push(i)

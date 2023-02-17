@@ -90,23 +90,28 @@
   padding: 1px 10px;
   margin: 2px 0;
   line-height: 1.2 !important;
+  word-break: break-all;
   min-height: 0px !important;
-  word-space: pre-wrap;
 }
 .v-list-item-warn {
   border-left: 3px solid #fb8c00 !important;
+  white-space: pre-wrap !important;
 }
 .v-list-item-info {
   border-left: 3px solid #4caf50 !important;
+  white-space: pre-wrap !important;
 }
 .v-list-item-debug {
   border-left: 3px solid #5cbbf6 !important;
+  white-space: pre-wrap !important;
 }
 .v-list-item-error {
   border-left: 3px solid #ff5252 !important;
+  white-space: pre-wrap !important;
 }
 .v-list-item-unknown {
   border-left: 3px solid #607d8b !important;
+  white-space: pre-wrap !important;
 }
 .v-list--dense .v-list-item,
 .v-list-item--dense {

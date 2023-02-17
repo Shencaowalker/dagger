@@ -244,14 +244,17 @@ func LokiLabels(c *gin.Context) {
 // @Success 200 {string} string	"[]"
 // @Router /api/v1/loki/label/values/ [get]
 func LokiLabelValues(c *gin.Context) {
+	start := c.DefaultQuery("start", "")
+	end := c.DefaultQuery("end", "")
 	label := c.DefaultQuery("label", "")
-	fmt.Println("the lable is：", label)
-	currentTime := time.Now()
-	m, _ := time.ParseDuration("-24h")
-	result := currentTime.Add(m)
-	onedayagotime := strconv.FormatInt(result.UnixNano(), 10)
-	start := c.DefaultQuery("start", onedayagotime)
-	end := c.DefaultQuery("end", strconv.FormatInt(currentTime.UnixNano(), 10))
+	fmt.Println("the lable is：", label, "the starttime is：", start, "the endtime is：", end)
+	// currentTime := time.Now()
+	// m, _ := time.ParseDuration("-24h")
+	// result := currentTime.Add(m)
+	// onedayagotime := strconv.FormatInt(result.UnixNano(), 10)
+	// start := c.DefaultQuery("start", onedayagotime)
+	// end := c.DefaultQuery("end", strconv.FormatInt(currentTime.UnixNano(), 10))
+
 	values := utils.GetLabelfromAllValues(label, start, end)
 	// if values != nil {
 	// 	c.JSON(200, values)
