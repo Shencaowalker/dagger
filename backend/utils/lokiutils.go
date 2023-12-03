@@ -163,7 +163,8 @@ func ShellHighlightShow(message string) string {
 					color = GetShellColor(strs[2])
 				}
 				if strs[1] == "1" || strs[1] == "" {
-					return fmt.Sprintf(`<b style="color: %s !important;">%s</b>`, color, strs[3])
+					// return fmt.Sprintf(`<b style="color: %s !important;">%s</b>`, color, strs[3])
+					return item
 				} else {
 					return fmt.Sprintf(`<b style="background-color: %s !important;color: slategray;">%s</b>`, color, strs[3])
 				}
