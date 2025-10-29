@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/driver/postgres"
 
+	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -44,6 +45,8 @@ func init() {
 		})
 	} else if dbtype == "postgres" {
 		DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	} else if dbtype == "sqlite" {
+		DB, err = gorm.Open(sqlite.Open("dagger.db"), &gorm.Config{})
 	}
 
 	if err != nil {
