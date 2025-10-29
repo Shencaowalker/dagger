@@ -186,7 +186,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dagger backend/main.go 或者�
 - 编译前端
 
 ```
-yarn install && yarn build
+yarn config set strict-ssl false
+yarn install
+export NODE_OPTIONS=--openssl-legacy-provider
+yarn build
 ```
 
 - 将生成的 `dist` 文件下复制到本地路径下， 例如 `/usr/src/`
