@@ -9,8 +9,14 @@ func RawExec(db *gorm.DB) {
 		result, err := db.Statement.ConnPool.ExecContext(db.Statement.Context, db.Statement.SQL.String(), db.Statement.Vars...)
 		if err != nil {
 			db.AddError(err)
-		} else {
-			db.RowsAffected, _ = result.RowsAffected()
+			return
+		}
+
+		db.RowsAffected, _ = result.RowsAffected()
+
+		if db.Statement.Result != nil {
+			db.Statement.Result.Result = result
+			db.Statement.Result.RowsAffected = db.RowsAffected
 		}
 	}
 }

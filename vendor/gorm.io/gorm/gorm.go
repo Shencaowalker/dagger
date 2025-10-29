@@ -3,8 +3,9 @@ package gorm
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"sync"
 	"time"
 
@@ -13,11 +14,16 @@ import (
 	"gorm.io/gorm/schema"
 )
 
+// for Config.cacheStore store PreparedStmtDB key
+const preparedStmtDBKey = "preparedStmt"
+
 // Config GORM config
 type Config struct {
 	// GORM perform single create, update, delete operations in transactions by default to ensure database data integrity
 	// You can disable it by setting `SkipDefaultTransaction` to true
-	SkipDefaultTransaction bool
+	SkipDefaultTransaction    bool
+	DefaultTransactionTimeout time.Duration
+
 	// NamingStrategy tables, columns naming strategy
 	NamingStrategy schema.Namer
 	// FullSaveAssociations full save associations
@@ -30,10 +36,17 @@ type Config struct {
 	DryRun bool
 	// PrepareStmt executes the given query in cached statement
 	PrepareStmt bool
+	// PrepareStmt cache support LRU expired,
+	// default maxsize=int64 Max value and ttl=1h
+	PrepareStmtMaxSize int
+	PrepareStmtTTL     time.Duration
+
 	// DisableAutomaticPing
 	DisableAutomaticPing bool
 	// DisableForeignKeyConstraintWhenMigrating
 	DisableForeignKeyConstraintWhenMigrating bool
+	// IgnoreRelationshipsWhenMigrating
+	IgnoreRelationshipsWhenMigrating bool
 	// DisableNestedTransaction disable nested transaction
 	DisableNestedTransaction bool
 	// AllowGlobalUpdate allow global update
@@ -42,6 +55,10 @@ type Config struct {
 	QueryFields bool
 	// CreateBatchSize default create batch size
 	CreateBatchSize int
+	// TranslateError enabling error translation
+	TranslateError bool
+	// PropagateUnscoped propagate Unscoped to every other nested statement
+	PropagateUnscoped bool
 
 	// ClauseBuilders clause builder
 	ClauseBuilders map[string]clause.ClauseBuilder
@@ -54,6 +71,32 @@ type Config struct {
 
 	callbacks  *callbacks
 	cacheStore *sync.Map
+}
+
+// Apply update config to new config
+func (c *Config) Apply(config *Config) error {
+	if config != c {
+		*config = *c
+	}
+	return nil
+}
+
+// AfterInitialize initialize plugins after db connected
+func (c *Config) AfterInitialize(db *DB) error {
+	if db != nil {
+		for _, plugin := range c.Plugins {
+			if err := plugin.Initialize(db); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Option gorm option interface
+type Option interface {
+	Apply(*Config) error
+	AfterInitialize(*DB) error
 }
 
 // DB GORM DB definition
@@ -70,11 +113,13 @@ type Session struct {
 	DryRun                   bool
 	PrepareStmt              bool
 	NewDB                    bool
+	Initialized              bool
 	SkipHooks                bool
 	SkipDefaultTransaction   bool
 	DisableNestedTransaction bool
 	AllowGlobalUpdate        bool
 	FullSaveAssociations     bool
+	PropagateUnscoped        bool
 	QueryFields              bool
 	Context                  context.Context
 	Logger                   logger.Interface
@@ -83,13 +128,40 @@ type Session struct {
 }
 
 // Open initialize db session based on dialector
-func Open(dialector Dialector, config *Config) (db *DB, err error) {
-	if config == nil {
-		config = &Config{}
+func Open(dialector Dialector, opts ...Option) (db *DB, err error) {
+	config := &Config{}
+
+	sort.Slice(opts, func(i, j int) bool {
+		_, isConfig := opts[i].(*Config)
+		_, isConfig2 := opts[j].(*Config)
+		return isConfig && !isConfig2
+	})
+
+	var skipAfterInitialize bool
+	for _, opt := range opts {
+		if opt != nil {
+			if applyErr := opt.Apply(config); applyErr != nil {
+				return nil, applyErr
+			}
+			defer func(opt Option) {
+				if skipAfterInitialize {
+					return
+				}
+				if errr := opt.AfterInitialize(db); errr != nil {
+					err = errr
+				}
+			}(opt)
+		}
+	}
+
+	if d, ok := dialector.(interface{ Apply(*Config) error }); ok {
+		if err = d.Apply(config); err != nil {
+			return
+		}
 	}
 
 	if config.NamingStrategy == nil {
-		config.NamingStrategy = schema.NamingStrategy{}
+		config.NamingStrategy = schema.NamingStrategy{IdentifierMaxLength: 64} // Default Identifier length is 64
 	}
 
 	if config.Logger == nil {
@@ -122,17 +194,26 @@ func Open(dialector Dialector, config *Config) (db *DB, err error) {
 
 	if config.Dialector != nil {
 		err = config.Dialector.Initialize(db)
-	}
+		if err != nil {
+			if db, _ := db.DB(); db != nil {
+				_ = db.Close()
+			}
 
-	preparedStmt := &PreparedStmtDB{
-		ConnPool:    db.ConnPool,
-		Stmts:       map[string]Stmt{},
-		Mux:         &sync.RWMutex{},
-		PreparedSQL: make([]string, 0, 100),
+			// DB is not initialized, so we skip AfterInitialize
+			skipAfterInitialize = true
+			return
+		}
+
+		if config.TranslateError {
+			if _, ok := db.Dialector.(ErrorTranslator); !ok {
+				config.Logger.Warn(context.Background(), "The TranslateError option is enabled, but the Dialector %s does not implement ErrorTranslator.", db.Dialector.Name())
+			}
+		}
 	}
-	db.cacheStore.Store("preparedStmt", preparedStmt)
 
 	if config.PrepareStmt {
+		preparedStmt := NewPreparedStmtDB(db.ConnPool, config.PrepareStmtMaxSize, config.PrepareStmtTTL)
+		db.cacheStore.Store(preparedStmtDBKey, preparedStmt)
 		db.ConnPool = preparedStmt
 	}
 
@@ -167,7 +248,6 @@ func (db *DB) Session(config *Session) *DB {
 			clone:     1,
 		}
 	)
-
 	if config.CreateBatchSize > 0 {
 		tx.Config.CreateBatchSize = config.CreateBatchSize
 	}
@@ -184,6 +264,10 @@ func (db *DB) Session(config *Session) *DB {
 		txConfig.FullSaveAssociations = true
 	}
 
+	if config.PropagateUnscoped {
+		txConfig.PropagateUnscoped = true
+	}
+
 	if config.Context != nil || config.PrepareStmt || config.SkipHooks {
 		tx.Statement = tx.Statement.clone()
 		tx.Statement.DB = tx
@@ -194,16 +278,30 @@ func (db *DB) Session(config *Session) *DB {
 	}
 
 	if config.PrepareStmt {
-		if v, ok := db.cacheStore.Load("preparedStmt"); ok {
-			preparedStmt := v.(*PreparedStmtDB)
+		var preparedStmt *PreparedStmtDB
+
+		if v, ok := db.cacheStore.Load(preparedStmtDBKey); ok {
+			preparedStmt = v.(*PreparedStmtDB)
+		} else {
+			preparedStmt = NewPreparedStmtDB(db.ConnPool, db.PrepareStmtMaxSize, db.PrepareStmtTTL)
+			db.cacheStore.Store(preparedStmtDBKey, preparedStmt)
+		}
+
+		switch t := tx.Statement.ConnPool.(type) {
+		case Tx:
+			tx.Statement.ConnPool = &PreparedStmtTX{
+				Tx:             t,
+				PreparedStmtDB: preparedStmt,
+			}
+		default:
 			tx.Statement.ConnPool = &PreparedStmtDB{
 				ConnPool: db.Config.ConnPool,
 				Mux:      preparedStmt.Mux,
 				Stmts:    preparedStmt.Stmts,
 			}
-			txConfig.ConnPool = tx.Statement.ConnPool
-			txConfig.PrepareStmt = true
 		}
+		txConfig.ConnPool = tx.Statement.ConnPool
+		txConfig.PrepareStmt = true
 	}
 
 	if config.SkipHooks {
@@ -234,6 +332,10 @@ func (db *DB) Session(config *Session) *DB {
 		tx.Config.NowFunc = config.NowFunc
 	}
 
+	if config.Initialized {
+		tx = tx.getInstance()
+	}
+
 	return tx
 }
 
@@ -244,7 +346,8 @@ func (db *DB) WithContext(ctx context.Context) *DB {
 
 // Debug start debug mode
 func (db *DB) Debug() (tx *DB) {
-	return db.Session(&Session{
+	tx = db.getInstance()
+	return tx.Session(&Session{
 		Logger: db.Logger.LogMode(logger.Info),
 	})
 }
@@ -280,10 +383,18 @@ func (db *DB) Callback() *callbacks {
 
 // AddError add error to db
 func (db *DB) AddError(err error) error {
-	if db.Error == nil {
-		db.Error = err
-	} else if err != nil {
-		db.Error = fmt.Errorf("%v; %w", db.Error, err)
+	if err != nil {
+		if db.Config.TranslateError {
+			if errTranslator, ok := db.Dialector.(ErrorTranslator); ok {
+				err = errTranslator.Translate(err)
+			}
+		}
+
+		if db.Error == nil {
+			db.Error = err
+		} else {
+			db.Error = fmt.Errorf("%v; %w", db.Error, err)
+		}
 	}
 	return db.Error
 }
@@ -291,30 +402,42 @@ func (db *DB) AddError(err error) error {
 // DB returns `*sql.DB`
 func (db *DB) DB() (*sql.DB, error) {
 	connPool := db.ConnPool
-
-	if stmtDB, ok := connPool.(*PreparedStmtDB); ok {
-		connPool = stmtDB.ConnPool
+	if db.Statement != nil && db.Statement.ConnPool != nil {
+		connPool = db.Statement.ConnPool
+	}
+	if tx, ok := connPool.(*sql.Tx); ok && tx != nil {
+		return (*sql.DB)(reflect.ValueOf(tx).Elem().FieldByName("db").UnsafePointer()), nil
 	}
 
-	if sqldb, ok := connPool.(*sql.DB); ok {
+	if dbConnector, ok := connPool.(GetDBConnector); ok && dbConnector != nil {
+		if sqldb, err := dbConnector.GetDBConn(); sqldb != nil || err != nil {
+			return sqldb, err
+		}
+	}
+
+	if sqldb, ok := connPool.(*sql.DB); ok && sqldb != nil {
 		return sqldb, nil
 	}
 
-	return nil, errors.New("invalid db")
+	return nil, ErrInvalidDB
 }
 
 func (db *DB) getInstance() *DB {
 	if db.clone > 0 {
-		tx := &DB{Config: db.Config}
+		tx := &DB{Config: db.Config, Error: db.Error}
 
 		if db.clone == 1 {
 			// clone with new statement
 			tx.Statement = &Statement{
-				DB:       tx,
-				ConnPool: db.Statement.ConnPool,
-				Context:  db.Statement.Context,
-				Clauses:  map[string]clause.Clause{},
-				Vars:     make([]interface{}, 0, 8),
+				DB:        tx,
+				ConnPool:  db.Statement.ConnPool,
+				Context:   db.Statement.Context,
+				Clauses:   map[string]clause.Clause{},
+				Vars:      make([]interface{}, 0, 8),
+				SkipHooks: db.Statement.SkipHooks,
+			}
+			if db.Config.PropagateUnscoped {
+				tx.Statement.Unscoped = db.Statement.Unscoped
 			}
 		} else {
 			// with clone statement
@@ -328,10 +451,12 @@ func (db *DB) getInstance() *DB {
 	return db
 }
 
+// Expr returns clause.Expr, which can be used to pass SQL expression as params
 func Expr(expr string, args ...interface{}) clause.Expr {
 	return clause.Expr{SQL: expr, Vars: args}
 }
 
+// SetupJoinTable setup join table schema
 func (db *DB) SetupJoinTable(model interface{}, field string, joinTable interface{}) error {
 	var (
 		tx                      = db.getInstance()
@@ -339,47 +464,50 @@ func (db *DB) SetupJoinTable(model interface{}, field string, joinTable interfac
 		modelSchema, joinSchema *schema.Schema
 	)
 
-	if err := stmt.Parse(model); err == nil {
-		modelSchema = stmt.Schema
-	} else {
+	err := stmt.Parse(model)
+	if err != nil {
 		return err
 	}
+	modelSchema = stmt.Schema
 
-	if err := stmt.Parse(joinTable); err == nil {
-		joinSchema = stmt.Schema
-	} else {
+	err = stmt.Parse(joinTable)
+	if err != nil {
 		return err
 	}
+	joinSchema = stmt.Schema
 
-	if relation, ok := modelSchema.Relationships.Relations[field]; ok && relation.JoinTable != nil {
-		for _, ref := range relation.References {
-			if f := joinSchema.LookUpField(ref.ForeignKey.DBName); f != nil {
-				f.DataType = ref.ForeignKey.DataType
-				f.GORMDataType = ref.ForeignKey.GORMDataType
-				if f.Size == 0 {
-					f.Size = ref.ForeignKey.Size
-				}
-				ref.ForeignKey = f
-			} else {
-				return fmt.Errorf("missing field %v for join table", ref.ForeignKey.DBName)
-			}
-		}
-
-		for name, rel := range relation.JoinTable.Relationships.Relations {
-			if _, ok := joinSchema.Relationships.Relations[name]; !ok {
-				rel.Schema = joinSchema
-				joinSchema.Relationships.Relations[name] = rel
-			}
-		}
-
-		relation.JoinTable = joinSchema
-	} else {
-		return fmt.Errorf("failed to found relation: %v", field)
+	relation, ok := modelSchema.Relationships.Relations[field]
+	isRelation := ok && relation.JoinTable != nil
+	if !isRelation {
+		return fmt.Errorf("failed to find relation: %s", field)
 	}
+
+	for _, ref := range relation.References {
+		f := joinSchema.LookUpField(ref.ForeignKey.DBName)
+		if f == nil {
+			return fmt.Errorf("missing field %s for join table", ref.ForeignKey.DBName)
+		}
+
+		f.DataType = ref.ForeignKey.DataType
+		f.GORMDataType = ref.ForeignKey.GORMDataType
+		if f.Size == 0 {
+			f.Size = ref.ForeignKey.Size
+		}
+		ref.ForeignKey = f
+	}
+
+	for name, rel := range relation.JoinTable.Relationships.Relations {
+		if _, ok := joinSchema.Relationships.Relations[name]; !ok {
+			rel.Schema = joinSchema
+			joinSchema.Relationships.Relations[name] = rel
+		}
+	}
+	relation.JoinTable = joinSchema
 
 	return nil
 }
 
+// Use use plugin
 func (db *DB) Use(plugin Plugin) error {
 	name := plugin.Name()
 	if _, ok := db.Plugins[name]; ok {
@@ -390,4 +518,19 @@ func (db *DB) Use(plugin Plugin) error {
 	}
 	db.Plugins[name] = plugin
 	return nil
+}
+
+// ToSQL for generate SQL string.
+//
+//	db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+//			return tx.Model(&User{}).Where(&User{Name: "foo", Age: 20})
+//				.Limit(10).Offset(5)
+//				.Order("name ASC")
+//				.First(&User{})
+//	})
+func (db *DB) ToSQL(queryFn func(tx *DB) *DB) string {
+	tx := queryFn(db.Session(&Session{DryRun: true, SkipDefaultTransaction: true}).getInstance())
+	stmt := tx.Statement
+
+	return db.Dialector.Explain(stmt.SQL.String(), stmt.Vars...)
 }
