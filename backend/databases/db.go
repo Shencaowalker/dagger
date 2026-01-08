@@ -46,7 +46,8 @@ func init() {
 	} else if dbtype == "postgres" {
 		DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	} else if dbtype == "sqlite" {
-		DB, err = gorm.Open(sqlite.Open("dagger.db"), &gorm.Config{})
+
+		DB, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	}
 
 	if err != nil {

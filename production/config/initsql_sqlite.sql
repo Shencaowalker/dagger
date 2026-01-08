@@ -172,8 +172,34 @@ VALUES (1, 1, 'admin', '$2a$10$zqlCha8VIdeXeixuwFDlAerOFaimREojlZdDfqhPn3dwYbdD9
 
 
 
-# 查看当前数据库在服务器上的绝对路径
-.databases
+-- -- 显示所有表
+-- .tables
 
-# 退出当前数据库
-.quit
+-- -- 显示表结构
+-- .schema 表名
+-- .schema -- 显示所有表结构
+
+-- -- 显示数据库信息
+-- .databases
+
+-- -- 显示索引
+-- .indices
+-- .indices 表名
+
+-- -- 导出数据库
+-- .output backup.sql
+-- .dump
+-- .output stdout
+
+-- -- 导入SQL文件
+-- .read file.sql
+
+-- -- 切换输出模式
+-- .mode column   -- 列模式
+-- .mode csv      -- CSV模式
+-- .mode list     -- 列表模式
+-- .mode markdown -- Markdown表格
+-- .headers on    -- 显示列名
+
+-- -- 退出
+-- .quit 或 .exit
